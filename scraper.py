@@ -25,7 +25,7 @@ def has_result(html: str) -> bool:
     return len(tables) >= 2 and len(tables[1].find_all("tr")) > 1
 
 
-def get_td(details, row, col):
+def safe_get(details, row, col=3):
     try:
         return details[row].find_all("td")[col].text.strip()
     except:
@@ -37,22 +37,18 @@ def get_td(details, row, col):
 def parse_html(html: str):
     soup = BeautifulSoup(html, "lxml")
     tables = soup.find_all("table")
-
     if len(tables) < 2:
         return None
 
-    # -------- STUDENT DETAILS TABLE --------
+    # ---------- STUDENT DETAILS ----------
     details = tables[0].find_all("tr")
 
-    name = get_td(details, 0, 3)
-    hallticket = get_td(details, 0, 1)
+    name = safe_get(details, 0)
+    father_name = safe_get(details, 1)
+    college = safe_get(details, 2)
+    branch = safe_get(details, 3)
 
-    father_name = get_td(details, 1, 1)
-    college = get_td(details, 1, 3)
-
-    branch = get_td(details, 2, 1)
-
-    # -------- SUBJECT TABLE --------
+    # ---------- SUBJECT TABLE ----------
     subjects = []
     rows = tables[1].find_all("tr")[1:]
 
@@ -77,7 +73,6 @@ def parse_html(html: str):
     return {
         "meta": {
             "name": name,
-            "hallTicket": hallticket,
             "fatherName": father_name,
             "college": college,
             "branch": branch
@@ -102,8 +97,7 @@ async def scrape_all_results(htno: str):
     timeout = aiohttp.ClientTimeout(total=10)
     connector = aiohttp.TCPConnector(limit=20, ssl=False)
 
-    semesters = []
-    student_meta = None
+    results = []
 
     async with aiohttp.ClientSession(
         timeout=timeout,
@@ -131,6 +125,7 @@ async def scrape_all_results(htno: str):
             responses = await asyncio.gather(*tasks)
 
             sem_subjects = []
+            sem_meta = None
 
             for html in responses:
                 if not html or not has_result(html):
@@ -140,14 +135,13 @@ async def scrape_all_results(htno: str):
                 if not parsed:
                     continue
 
-                if not student_meta:
-                    student_meta = parsed["meta"]
-
+                sem_meta = parsed["meta"]
                 for s in parsed["subjects"]:
                     s["semester"] = sem
                     sem_subjects.append(s)
 
             if sem_subjects:
+                # -------- REGULAR / SUPPLY DETECTION --------
                 seen = set()
                 for s in sem_subjects:
                     if s["subjectCode"] in seen:
@@ -156,19 +150,10 @@ async def scrape_all_results(htno: str):
                         s["attempt"] = "regular"
                         seen.add(s["subjectCode"])
 
-                semesters.append({
+                results.append({
                     "semester": sem,
-                    "subjects": sem_subjects
+                    "subjects": sem_subjects,
+                    "meta": sem_meta
                 })
 
-    if not semesters or not student_meta:
-        return None
-
-    return {
-        "hallTicket": htno,
-        "name": student_meta["name"],
-        "fatherName": student_meta["fatherName"],
-        "college": student_meta["college"],
-        "branch": student_meta["branch"],
-        "semesters": semesters
-    }
+    return results
