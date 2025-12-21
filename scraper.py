@@ -16,8 +16,9 @@ VALID_COMBOS = [
     ("r17", "intgrade"),
 ]
 
-
-# ------------------ UTILS ------------------
+# --------------------------------------------------
+# UTILS
+# --------------------------------------------------
 
 def has_result(html: str) -> bool:
     soup = BeautifulSoup(html, "lxml")
@@ -25,35 +26,52 @@ def has_result(html: str) -> bool:
     return len(tables) >= 2 and len(tables[1].find_all("tr")) > 1
 
 
-def safe_get(details, row, col=3):
-    try:
-        return details[row].find_all("td")[col].text.strip()
-    except:
-        return None
-
-
-# ------------------ PARSER ------------------
+# --------------------------------------------------
+# PARSER (LABEL BASED — THIS IS THE KEY FIX)
+# --------------------------------------------------
 
 def parse_html(html: str):
     soup = BeautifulSoup(html, "lxml")
     tables = soup.find_all("table")
+
     if len(tables) < 2:
         return None
 
-    # ---------- STUDENT DETAILS ----------
-    details = tables[0].find_all("tr")
+    details_table = tables[0]
 
-    name = safe_get(details, 0)
-    father_name = safe_get(details, 1)
-    college = safe_get(details, 2)
-    branch = safe_get(details, 3)
+    name = None
+    father_name = None
+    college = None
+    branch = None
 
-    # ---------- SUBJECT TABLE ----------
+    # 🔥 LABEL BASED EXTRACTION
+    for row in details_table.find_all("tr"):
+        cells = [td.text.strip() for td in row.find_all("td")]
+
+        for i, cell in enumerate(cells):
+            key = cell.lower()
+
+            if key == "name" and i + 1 < len(cells):
+                name = cells[i + 1]
+
+            elif "father" in key and i + 1 < len(cells):
+                father_name = cells[i + 1]
+
+            elif "college" in key and i + 1 < len(cells):
+                college = cells[i + 1]
+
+            elif "branch" in key and i + 1 < len(cells):
+                branch = cells[i + 1]
+
+    # --------------------------------------------------
+    # SUBJECT TABLE
+    # --------------------------------------------------
+
     subjects = []
-    rows = tables[1].find_all("tr")[1:]
+    subject_rows = tables[1].find_all("tr")[1:]
 
-    for r in rows:
-        tds = [td.text.strip() for td in r.find_all("td")]
+    for row in subject_rows:
+        tds = [td.text.strip() for td in row.find_all("td")]
         if len(tds) < 6:
             continue
 
@@ -81,7 +99,9 @@ def parse_html(html: str):
     }
 
 
-# ------------------ FETCH ------------------
+# --------------------------------------------------
+# FETCH
+# --------------------------------------------------
 
 async def fetch(session, url):
     try:
@@ -91,10 +111,12 @@ async def fetch(session, url):
         return None
 
 
-# ------------------ MAIN SCRAPER ------------------
+# --------------------------------------------------
+# MAIN SCRAPER
+# --------------------------------------------------
 
 async def scrape_all_results(htno: str):
-    timeout = aiohttp.ClientTimeout(total=10)
+    timeout = aiohttp.ClientTimeout(total=12)
     connector = aiohttp.TCPConnector(limit=20, ssl=False)
 
     results = []
@@ -105,10 +127,10 @@ async def scrape_all_results(htno: str):
         connector=connector
     ) as session:
 
-        for sem, codes in EXAM_CODES.items():
+        for semester, exam_codes in EXAM_CODES.items():
             tasks = []
 
-            for code in codes:
+            for code in exam_codes:
                 for etype, rtype in VALID_COMBOS:
                     url = (
                         f"{BASE_URL}"
@@ -135,13 +157,15 @@ async def scrape_all_results(htno: str):
                 if not parsed:
                     continue
 
-                sem_meta = parsed["meta"]
+                if not sem_meta:
+                    sem_meta = parsed["meta"]
+
                 for s in parsed["subjects"]:
-                    s["semester"] = sem
+                    s["semester"] = semester
                     sem_subjects.append(s)
 
             if sem_subjects:
-                # -------- REGULAR / SUPPLY DETECTION --------
+                # 🔁 REGULAR / SUPPLY DETECTION
                 seen = set()
                 for s in sem_subjects:
                     if s["subjectCode"] in seen:
@@ -151,7 +175,7 @@ async def scrape_all_results(htno: str):
                         seen.add(s["subjectCode"])
 
                 results.append({
-                    "semester": sem,
+                    "semester": semester,
                     "subjects": sem_subjects,
                     "meta": sem_meta
                 })
