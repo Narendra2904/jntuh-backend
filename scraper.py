@@ -1,4 +1,3 @@
-# scraper.py
 import aiohttp
 import asyncio
 from bs4 import BeautifulSoup
@@ -8,6 +7,7 @@ BASE_URL = "http://results.jntuh.ac.in/resultAction"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 VALID_COMBOS = [
@@ -16,34 +16,63 @@ VALID_COMBOS = [
     ("r17", "intgrade"),
 ]
 
-
+# ------------------------------------------------
+# CHECK IF RESULT EXISTS
+# ------------------------------------------------
 def has_result(html: str) -> bool:
     soup = BeautifulSoup(html, "lxml")
     tables = soup.find_all("table")
     return len(tables) >= 2
 
 
+# ------------------------------------------------
+# PARSE HTML (LABEL BASED — IMPORTANT)
+# ------------------------------------------------
 def parse_html(html: str):
     soup = BeautifulSoup(html, "lxml")
     tables = soup.find_all("table")
     if len(tables) < 2:
         return None
 
-    # -------- STUDENT DETAILS (FIXED) --------
-    rows = tables[0].find_all("tr")
+    details_table = tables[0]
+    results_table = tables[1]
 
-    name = rows[0].find_all("td")[3].text.strip()
-    htno = rows[0].find_all("td")[1].text.strip()
+    # ---------- META INFO ----------
+    meta = {
+        "name": None,
+        "fatherName": None,
+        "collegeCode": None,
+        "branch": None,
+    }
 
-    father_name = rows[1].find_all("td")[1].text.strip()
-    college_code = rows[1].find_all("td")[3].text.strip()
+    for row in details_table.find_all("tr"):
+        tds = [td.get_text(strip=True) for td in row.find_all("td")]
+        if len(tds) < 2:
+            continue
 
-    branch = rows[2].find_all("td")[3].text.strip()
+        label = tds[0].lower()
 
-    # -------- SUBJECTS --------
+        if "name" in label and not meta["name"]:
+            meta["name"] = tds[-1]
+
+        elif "father" in label:
+            meta["fatherName"] = tds[-1]
+
+        elif "college" in label:
+            meta["collegeCode"] = tds[-1]
+
+        elif "branch" in label:
+            meta["branch"] = tds[-1]
+
+    if not meta["name"]:
+        return None
+
+    # ---------- SUBJECTS ----------
     subjects = []
-    for r in tables[1].find_all("tr")[1:]:
-        tds = [td.text.strip() for td in r.find_all("td")]
+    rows = results_table.find_all("tr")[1:]
+
+    for r in rows:
+        tds = [td.get_text(strip=True) for td in r.find_all("td")]
         if len(tds) < 6:
             continue
 
@@ -54,21 +83,21 @@ def parse_html(html: str):
             "external": tds[3],
             "total": tds[4],
             "grade": tds[5],
-            "credits": tds[6] if len(tds) > 6 else "0"
+            "credits": tds[6] if len(tds) > 6 else "0",
         })
 
+    if not subjects:
+        return None
+
     return {
-        "meta": {
-            "name": name,
-            "hallTicket": htno,
-            "fatherName": father_name,
-            "collegeCode": college_code,
-            "branch": branch
-        },
-        "subjects": subjects
+        "meta": meta,
+        "subjects": subjects,
     }
 
 
+# ------------------------------------------------
+# FETCH PAGE
+# ------------------------------------------------
 async def fetch(session, url):
     try:
         async with session.get(url, ssl=False) as r:
@@ -77,10 +106,21 @@ async def fetch(session, url):
         return None
 
 
+# ------------------------------------------------
+# MAIN SCRAPER
+# ------------------------------------------------
 async def scrape_all_results(htno: str):
+    timeout = aiohttp.ClientTimeout(total=12)
+    connector = aiohttp.TCPConnector(limit=20, ssl=False)
+
     results = []
 
-    async with aiohttp.ClientSession(headers=HEADERS) as session:
+    async with aiohttp.ClientSession(
+        timeout=timeout,
+        headers=HEADERS,
+        connector=connector,
+    ) as session:
+
         for sem, codes in EXAM_CODES.items():
             tasks = []
 
@@ -92,6 +132,8 @@ async def scrape_all_results(htno: str):
                         f"&degree=btech"
                         f"&etype={etype}"
                         f"&type={rtype}"
+                        f"&result=null"
+                        f"&grad=null"
                         f"&htno={htno}"
                     )
                     tasks.append(fetch(session, url))
@@ -99,7 +141,7 @@ async def scrape_all_results(htno: str):
             responses = await asyncio.gather(*tasks)
 
             sem_subjects = []
-            meta = None
+            sem_meta = None
 
             for html in responses:
                 if not html or not has_result(html):
@@ -109,16 +151,26 @@ async def scrape_all_results(htno: str):
                 if not parsed:
                     continue
 
-                meta = parsed["meta"]
+                sem_meta = parsed["meta"]
+
                 for s in parsed["subjects"]:
                     s["semester"] = sem
                     sem_subjects.append(s)
 
             if sem_subjects:
+                # -------- SUPPLY DETECTION --------
+                seen = set()
+                for s in sem_subjects:
+                    if s["subjectCode"] in seen:
+                        s["attempt"] = "supply"
+                    else:
+                        s["attempt"] = "regular"
+                        seen.add(s["subjectCode"])
+
                 results.append({
                     "semester": sem,
                     "subjects": sem_subjects,
-                    "meta": meta
+                    "meta": sem_meta,
                 })
 
     return results
