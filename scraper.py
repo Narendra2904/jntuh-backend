@@ -7,7 +7,6 @@ BASE_URL = "http://results.jntuh.ac.in/resultAction"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Accept-Language": "en-US,en;q=0.9",
 }
 
 VALID_COMBOS = [
@@ -17,16 +16,29 @@ VALID_COMBOS = [
 ]
 
 # ------------------------------------------------
-# CHECK IF RESULT EXISTS
-# ------------------------------------------------
 def has_result(html: str) -> bool:
     soup = BeautifulSoup(html, "lxml")
-    tables = soup.find_all("table")
-    return len(tables) >= 2
+    return len(soup.find_all("table")) >= 2
 
 
 # ------------------------------------------------
-# PARSE HTML (LABEL BASED — IMPORTANT)
+def extract_value(row_text: str, key: str):
+    """
+    Extract value after label safely
+    Example: 'Father Name : RAMESH' -> RAMESH
+    """
+    row_text = row_text.replace("\xa0", " ").strip()
+    if key.lower() not in row_text.lower():
+        return None
+
+    # split by colon
+    if ":" in row_text:
+        return row_text.split(":", 1)[1].strip()
+
+    # fallback: last word chunk
+    return row_text.replace(key, "").strip()
+
+
 # ------------------------------------------------
 def parse_html(html: str):
     soup = BeautifulSoup(html, "lxml")
@@ -37,7 +49,6 @@ def parse_html(html: str):
     details_table = tables[0]
     results_table = tables[1]
 
-    # ---------- META INFO ----------
     meta = {
         "name": None,
         "fatherName": None,
@@ -45,33 +56,29 @@ def parse_html(html: str):
         "branch": None,
     }
 
+    # ---------- STUDENT DETAILS (TEXT BASED) ----------
     for row in details_table.find_all("tr"):
-        tds = [td.get_text(strip=True) for td in row.find_all("td")]
-        if len(tds) < 2:
-            continue
+        row_text = row.get_text(" ", strip=True)
 
-        label = tds[0].lower()
+        if not meta["name"] and "name" in row_text.lower():
+            meta["name"] = extract_value(row_text, "Name")
 
-        if "name" in label and not meta["name"]:
-            meta["name"] = tds[-1]
+        if not meta["fatherName"] and "father" in row_text.lower():
+            meta["fatherName"] = extract_value(row_text, "Father Name")
 
-        elif "father" in label:
-            meta["fatherName"] = tds[-1]
+        if not meta["collegeCode"] and "college" in row_text.lower():
+            meta["collegeCode"] = extract_value(row_text, "College Code")
 
-        elif "college" in label:
-            meta["collegeCode"] = tds[-1]
+        if not meta["branch"] and "branch" in row_text.lower():
+            meta["branch"] = extract_value(row_text, "Branch")
 
-        elif "branch" in label:
-            meta["branch"] = tds[-1]
-
+    # HARD GUARD
     if not meta["name"]:
         return None
 
     # ---------- SUBJECTS ----------
     subjects = []
-    rows = results_table.find_all("tr")[1:]
-
-    for r in rows:
+    for r in results_table.find_all("tr")[1:]:
         tds = [td.get_text(strip=True) for td in r.find_all("td")]
         if len(tds) < 6:
             continue
@@ -96,31 +103,19 @@ def parse_html(html: str):
 
 
 # ------------------------------------------------
-# FETCH PAGE
-# ------------------------------------------------
 async def fetch(session, url):
     try:
-        async with session.get(url, ssl=False) as r:
+        async with session.get(url, ssl=False, timeout=8) as r:
             return await r.text()
     except:
         return None
 
 
 # ------------------------------------------------
-# MAIN SCRAPER
-# ------------------------------------------------
 async def scrape_all_results(htno: str):
-    timeout = aiohttp.ClientTimeout(total=12)
-    connector = aiohttp.TCPConnector(limit=20, ssl=False)
-
     results = []
 
-    async with aiohttp.ClientSession(
-        timeout=timeout,
-        headers=HEADERS,
-        connector=connector,
-    ) as session:
-
+    async with aiohttp.ClientSession(headers=HEADERS) as session:
         for sem, codes in EXAM_CODES.items():
             tasks = []
 
@@ -132,8 +127,6 @@ async def scrape_all_results(htno: str):
                         f"&degree=btech"
                         f"&etype={etype}"
                         f"&type={rtype}"
-                        f"&result=null"
-                        f"&grad=null"
                         f"&htno={htno}"
                     )
                     tasks.append(fetch(session, url))
@@ -158,7 +151,6 @@ async def scrape_all_results(htno: str):
                     sem_subjects.append(s)
 
             if sem_subjects:
-                # -------- SUPPLY DETECTION --------
                 seen = set()
                 for s in sem_subjects:
                     if s["subjectCode"] in seen:
