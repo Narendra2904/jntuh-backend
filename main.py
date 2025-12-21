@@ -24,12 +24,16 @@ def root():
     return {"status": "JNTUH Results API running"}
 
 
+# ---------------- NORMALIZER ----------------
+
 def normalize(htno, raw):
     if not raw:
         return None
 
+    meta = raw[0].get("meta", {})
+
     return {
-       "hallTicket": htno,
+        "hallTicket": htno,
         "name": meta.get("name"),
         "fatherName": meta.get("fatherName"),
         "college": meta.get("college"),
@@ -45,11 +49,13 @@ def normalize(htno, raw):
     }
 
 
+# ---------------- API ----------------
+
 @app.get("/result/{htno}")
 async def get_result(htno: str):
     htno = htno.strip()
 
-    # ⚡ 1. TRY REDIS (SAFE)
+    # ⚡ REDIS CACHE
     cached = get_cache(htno)
     if cached:
         return {
@@ -58,7 +64,7 @@ async def get_result(htno: str):
             "data": cached
         }
 
-    # 💾 2. SQLITE DB
+    # 💾 SQLITE DB
     db_result = await get_result_from_db(htno)
     if db_result:
         set_cache(htno, db_result)
@@ -68,14 +74,14 @@ async def get_result(htno: str):
             "data": db_result
         }
 
-    # 🌐 3. SCRAPER
+    # 🌐 SCRAPER
     raw = await scrape_all_results(htno)
     if not raw:
         raise HTTPException(404, "Result not found")
 
     normalized = normalize(htno, raw)
 
-    # SAVE TO DB + CACHE (SAFE)
+    # SAVE
     await save_result_to_db(htno, normalized)
     set_cache(htno, normalized)
 
