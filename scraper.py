@@ -17,11 +17,22 @@ VALID_COMBOS = [
 ]
 
 
+# ------------------ UTILS ------------------
+
 def has_result(html: str) -> bool:
     soup = BeautifulSoup(html, "lxml")
     tables = soup.find_all("table")
     return len(tables) >= 2 and len(tables[1].find_all("tr")) > 1
 
+
+def safe_get(details, idx):
+    try:
+        return details[idx].find_all("td")[3].text.strip()
+    except:
+        return None
+
+
+# ------------------ PARSER ------------------
 
 def parse_html(html: str):
     soup = BeautifulSoup(html, "lxml")
@@ -29,10 +40,15 @@ def parse_html(html: str):
     if len(tables) < 2:
         return None
 
+    # ---------- STUDENT DETAILS ----------
     details = tables[0].find_all("tr")
-    name = details[0].find_all("td")[3].text.strip()
-    college = details[1].find_all("td")[3].text.strip()
 
+    name = safe_get(details, 0)
+    father_name = safe_get(details, 1)
+    college = safe_get(details, 2)
+    branch = safe_get(details, 3)
+
+    # ---------- SUBJECT TABLE ----------
     subjects = []
     rows = tables[1].find_all("tr")[1:]
 
@@ -57,11 +73,15 @@ def parse_html(html: str):
     return {
         "meta": {
             "name": name,
-            "college": college
+            "fatherName": father_name,
+            "college": college,
+            "branch": branch
         },
         "subjects": subjects
     }
 
+
+# ------------------ FETCH ------------------
 
 async def fetch(session, url):
     try:
@@ -70,6 +90,8 @@ async def fetch(session, url):
     except:
         return None
 
+
+# ------------------ MAIN SCRAPER ------------------
 
 async def scrape_all_results(htno: str):
     timeout = aiohttp.ClientTimeout(total=10)
@@ -119,7 +141,7 @@ async def scrape_all_results(htno: str):
                     sem_subjects.append(s)
 
             if sem_subjects:
-                # ✅ SUPPLY DETECTION PER SEMESTER (FAST + CORRECT)
+                # -------- SUPPLY DETECTION --------
                 seen = set()
                 for s in sem_subjects:
                     if s["subjectCode"] in seen:
