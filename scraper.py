@@ -16,6 +16,7 @@ VALID_COMBOS = [
     ("r17", "intgrade"),
 ]
 
+
 # ------------------ UTILS ------------------
 
 def has_result(html: str) -> bool:
@@ -24,9 +25,9 @@ def has_result(html: str) -> bool:
     return len(tables) >= 2 and len(tables[1].find_all("tr")) > 1
 
 
-def safe_get(details, idx):
+def get_td(details, row, col):
     try:
-        return details[idx].find_all("td")[3].text.strip()
+        return details[row].find_all("td")[col].text.strip()
     except:
         return None
 
@@ -36,24 +37,22 @@ def safe_get(details, idx):
 def parse_html(html: str):
     soup = BeautifulSoup(html, "lxml")
     tables = soup.find_all("table")
+
     if len(tables) < 2:
         return None
 
-    # ---------- STUDENT DETAILS (FIXED ORDER) ----------
+    # -------- STUDENT DETAILS TABLE --------
     details = tables[0].find_all("tr")
 
-    # JNTUH table order:
-    # 0 -> Hall Ticket
-    # 1 -> Student Name
-    # 2 -> Father Name
-    # 3 -> College Name
-    # 4 -> Branch
-    name = safe_get(details, 1)
-    father_name = safe_get(details, 2)
-    college = safe_get(details, 3)
-    branch = safe_get(details, 4)
+    name = get_td(details, 0, 3)
+    hallticket = get_td(details, 0, 1)
 
-    # ---------- SUBJECT TABLE ----------
+    father_name = get_td(details, 1, 1)
+    college = get_td(details, 1, 3)
+
+    branch = get_td(details, 2, 1)
+
+    # -------- SUBJECT TABLE --------
     subjects = []
     rows = tables[1].find_all("tr")[1:]
 
@@ -78,6 +77,7 @@ def parse_html(html: str):
     return {
         "meta": {
             "name": name,
+            "hallTicket": hallticket,
             "fatherName": father_name,
             "college": college,
             "branch": branch
@@ -102,7 +102,8 @@ async def scrape_all_results(htno: str):
     timeout = aiohttp.ClientTimeout(total=10)
     connector = aiohttp.TCPConnector(limit=20, ssl=False)
 
-    results = []
+    semesters = []
+    student_meta = None
 
     async with aiohttp.ClientSession(
         timeout=timeout,
@@ -130,7 +131,6 @@ async def scrape_all_results(htno: str):
             responses = await asyncio.gather(*tasks)
 
             sem_subjects = []
-            sem_meta = None
 
             for html in responses:
                 if not html or not has_result(html):
@@ -140,13 +140,14 @@ async def scrape_all_results(htno: str):
                 if not parsed:
                     continue
 
-                sem_meta = parsed["meta"]
+                if not student_meta:
+                    student_meta = parsed["meta"]
+
                 for s in parsed["subjects"]:
                     s["semester"] = sem
                     sem_subjects.append(s)
 
             if sem_subjects:
-                # -------- SUPPLY DETECTION --------
                 seen = set()
                 for s in sem_subjects:
                     if s["subjectCode"] in seen:
@@ -155,10 +156,19 @@ async def scrape_all_results(htno: str):
                         s["attempt"] = "regular"
                         seen.add(s["subjectCode"])
 
-                results.append({
+                semesters.append({
                     "semester": sem,
-                    "subjects": sem_subjects,
-                    "meta": sem_meta
+                    "subjects": sem_subjects
                 })
 
-    return results
+    if not semesters or not student_meta:
+        return None
+
+    return {
+        "hallTicket": htno,
+        "name": student_meta["name"],
+        "fatherName": student_meta["fatherName"],
+        "college": student_meta["college"],
+        "branch": student_meta["branch"],
+        "semesters": semesters
+    }
