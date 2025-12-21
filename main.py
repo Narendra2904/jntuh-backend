@@ -29,9 +29,11 @@ def normalize(htno, raw):
         return None
 
     return {
-        "hallTicket": htno,
-        "name": raw[0]["meta"]["name"],
-        "college": raw[0]["meta"]["college"],
+       "hallTicket": htno,
+        "name": meta.get("name"),
+        "fatherName": meta.get("fatherName"),
+        "college": meta.get("college"),
+        "branch": meta.get("branch"),
         "semesters": [
             {
                 "semester": r["semester"],
