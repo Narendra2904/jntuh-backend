@@ -16,7 +16,6 @@ VALID_COMBOS = [
     ("r17", "intgrade"),
 ]
 
-
 # ------------------ UTILS ------------------
 
 def has_result(html: str) -> bool:
@@ -40,13 +39,19 @@ def parse_html(html: str):
     if len(tables) < 2:
         return None
 
-    # ---------- STUDENT DETAILS ----------
+    # ---------- STUDENT DETAILS (FIXED ORDER) ----------
     details = tables[0].find_all("tr")
 
-    name = safe_get(details, 0)
-    father_name = safe_get(details, 1)
-    college = safe_get(details, 2)
-    branch = safe_get(details, 3)
+    # JNTUH table order:
+    # 0 -> Hall Ticket
+    # 1 -> Student Name
+    # 2 -> Father Name
+    # 3 -> College Name
+    # 4 -> Branch
+    name = safe_get(details, 1)
+    father_name = safe_get(details, 2)
+    college = safe_get(details, 3)
+    branch = safe_get(details, 4)
 
     # ---------- SUBJECT TABLE ----------
     subjects = []
