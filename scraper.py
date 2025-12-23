@@ -1,137 +1,205 @@
-import aiohttp
 import asyncio
+import aiohttp
 from bs4 import BeautifulSoup
-from exam_codes import EXAM_CODES
+import pdfplumber
+from pathlib import Path
 
-BASE_URL = "http://results.jntuh.ac.in/resultAction"
+from exam_codes import EXAM_CODES
+from branch_codes import get_branch_name
+
+
+# =========================
+# CONSTANTS
+# =========================
+
+RESULT_URL = "http://results.jntuh.ac.in/resultAction"
+
+PAYLOADS = [
+    "&degree=btech&etype=r17&result=null&grad=null&type=intgrade&htno=",
+    "&degree=btech&etype=r17&result=gradercrv&grad=null&type=rcrvintgrade&htno=",
+]
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Accept-Language": "en-US,en;q=0.9"
+    "Accept": "text/html",
 }
 
-VALID_COMBOS = [
-    ("r22", "grade"),
-    ("r18", "grade"),
-    ("r17", "intgrade"),
-]
+COLLEGE_PDF = Path("data/btech_mba_centers_reviewed.pdf")
 
 
-def has_result(html: str) -> bool:
-    soup = BeautifulSoup(html, "lxml")
-    tables = soup.find_all("table")
-    return len(tables) >= 2 and len(tables[1].find_all("tr")) > 1
+# =========================
+# COLLEGE MAP (PDF → CACHE)
+# =========================
+
+_COLLEGE_MAP = None
 
 
-def parse_html(html: str):
-    soup = BeautifulSoup(html, "lxml")
-    tables = soup.find_all("table")
-    if len(tables) < 2:
-        return None
+def load_college_map():
+    global _COLLEGE_MAP
 
-    details = tables[0].find_all("tr")
-    name = details[0].find_all("td")[3].text.strip()
-    college = details[1].find_all("td")[3].text.strip()
+    if _COLLEGE_MAP is not None:
+        return _COLLEGE_MAP
 
-    subjects = []
-    rows = tables[1].find_all("tr")[1:]
+    _COLLEGE_MAP = {}
 
-    for r in rows:
-        tds = [td.text.strip() for td in r.find_all("td")]
-        if len(tds) < 6:
-            continue
+    if not COLLEGE_PDF.exists():
+        print("⚠️ College PDF not found")
+        return _COLLEGE_MAP
 
-        subjects.append({
-            "subjectCode": tds[0],
-            "subjectName": tds[1],
-            "internal": tds[2],
-            "external": tds[3],
-            "total": tds[4],
-            "grade": tds[5],
-            "credits": tds[6] if len(tds) > 6 else "0"
-        })
+    with pdfplumber.open(COLLEGE_PDF) as pdf:
+        for page in pdf.pages:
+            table = page.extract_table()
 
-    if not subjects:
-        return None
+            if not table:
+                continue
 
-    return {
-        "meta": {
-            "name": name,
-            "college": college
-        },
-        "subjects": subjects
-    }
+            # Skip header row
+            for row in table[1:]:
+                if not row or len(row) < 2:
+                    continue
+
+                code = row[0]
+                college_name = row[1]
+
+                if code and college_name:
+                    code = code.strip()
+                    college_name = college_name.strip()
+
+                    if len(code) == 2:
+                        _COLLEGE_MAP[code] = college_name
+
+    print(f"✅ Loaded {len(_COLLEGE_MAP)} college names from PDF")
+    return _COLLEGE_MAP
 
 
-async def fetch(session, url):
-    try:
-        async with session.get(url, ssl=False) as r:
-            return await r.text()
-    except:
-        return None
+
+# =========================
+# SCRAPER
+# =========================
+
+class ResultScraper:
+    def __init__(self, roll_number: str):
+        self.roll_number = roll_number.upper()
+        self.college_map = load_college_map()
+
+        # THIS is what main.py expects
+        self.results = []   # list of { semester, meta, subjects }
+
+        self._meta = None   # store once
 
 
-async def scrape_all_results(htno: str):
-    timeout = aiohttp.ClientTimeout(total=10)
-    connector = aiohttp.TCPConnector(limit=20, ssl=False)
+    # ---------------------
+    async def fetch(self, session, semester, exam_code, payload):
+        url = f"{RESULT_URL}?&examCode={exam_code}{payload}{self.roll_number}"
+        try:
+            async with session.get(url, ssl=False, timeout=8) as r:
+                return semester, exam_code,await r.text()
+        except Exception:
+            return None
 
-    results = []
 
-    async with aiohttp.ClientSession(
-        timeout=timeout,
-        headers=HEADERS,
-        connector=connector
-    ) as session:
+    # ---------------------
+    def parse_html(self, semester, exam_code, html):
+        if not html or "SUBJECT CODE" not in html:
+            return
 
-        for sem, codes in EXAM_CODES.items():
+        soup = BeautifulSoup(html, "lxml")
+        tables = soup.find_all("table")
+        if len(tables) < 2:
+            return
+
+        # -------- META (ONCE) --------
+        if self._meta is None:
+            try:
+                details = tables[0].find_all("tr")
+                htno = details[0].find_all("td")[1].text.strip()
+                name = details[0].find_all("td")[3].text.strip()
+                father = details[1].find_all("td")[1].text.strip()
+                college_code = details[1].find_all("td")[3].text.strip()
+
+                self._meta = {
+                    "hallTicket": htno,
+                    "name": name,
+                    "fatherName": father,
+                    "collegeCode": college_code,
+                    "college": self.college_map.get(college_code),
+                    "branch": get_branch_name(htno),
+                }
+            except Exception:
+                return
+
+        # -------- SUBJECTS --------
+        rows = tables[1].find_all("tr")
+        header = [b.text.strip() for b in rows[0].find_all("b")]
+
+        subjects = []
+
+        for row in rows[1:]:
+            cols = row.find_all("td")
+            if not cols:
+                continue
+
+            subject = {
+                "subjectCode": cols[header.index("SUBJECT CODE")].text.strip(),
+                "subjectName": cols[header.index("SUBJECT NAME")].text.strip(),
+                "examCode": exam_code,
+                "grade": cols[header.index("GRADE")].text.strip(),
+                "credits": cols[header.index("CREDITS(C)")].text.strip(),
+                "semester": semester,
+                "attempt": "regular",   # main.py adjusts attempts later
+            }
+
+            if "INTERNAL" in header:
+                subject["internal"] = cols[header.index("INTERNAL")].text.strip()
+            if "EXTERNAL" in header:
+                subject["external"] = cols[header.index("EXTERNAL")].text.strip()
+            if "TOTAL" in header:
+                subject["total"] = cols[header.index("TOTAL")].text.strip()
+
+            subjects.append(subject)
+
+        if subjects:
+            self.results.append({
+                "semester": semester,
+                "meta": self._meta,
+                "subjects": subjects,
+            })
+
+
+    # ---------------------
+    async def scrape_all(self):
+        timeout = aiohttp.ClientTimeout(total=10)
+
+        async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
             tasks = []
 
-            for code in codes:
-                for etype, rtype in VALID_COMBOS:
-                    url = (
-                        f"{BASE_URL}"
-                        f"?examCode={code}"
-                        f"&degree=btech"
-                        f"&etype={etype}"
-                        f"&type={rtype}"
-                        f"&result=null"
-                        f"&grad=null"
-                        f"&htno={htno}"
-                    )
-                    tasks.append(fetch(session, url))
+            for semester, exam_codes in EXAM_CODES.items():
+                for code in exam_codes:
+                    for payload in PAYLOADS:
+                        tasks.append(
+                            self.fetch(session, semester, code, payload)
+                        )
 
-            responses = await asyncio.gather(*tasks)
+            # Around line 184
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
 
-            sem_subjects = []
-            sem_meta = None
+            for item in responses:
+                        # Everything below this line is now indented by 4 spaces
+                if isinstance(item, tuple) and len(item) == 3:
+                    semester, exam_code, html = item 
+                    self.parse_html(semester, exam_code, html)  
 
-            for html in responses:
-                if not html or not has_result(html):
-                    continue
 
-                parsed = parse_html(html)
-                if not parsed:
-                    continue
+    # ---------------------
+    async def run(self):
+        await self.scrape_all()
+        return self.results if self.results else None
 
-                sem_meta = parsed["meta"]
-                for s in parsed["subjects"]:
-                    s["semester"] = sem
-                    sem_subjects.append(s)
 
-            if sem_subjects:
-                # ✅ SUPPLY DETECTION PER SEMESTER (FAST + CORRECT)
-                seen = set()
-                for s in sem_subjects:
-                    if s["subjectCode"] in seen:
-                        s["attempt"] = "supply"
-                    else:
-                        s["attempt"] = "regular"
-                        seen.add(s["subjectCode"])
+# =========================
+# USED BY main.py
+# =========================
 
-                results.append({
-                    "semester": sem,
-                    "subjects": sem_subjects,
-                    "meta": sem_meta
-                })
-
-    return results
+async def scrape_all_results(htno: str):
+    scraper = ResultScraper(htno)
+    return await scraper.run()
