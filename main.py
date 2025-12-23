@@ -1,10 +1,12 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+import traceback
+
 from scraper import scrape_all_results
 from cache import get_cache, set_cache
 from database import init_db, get_result_from_db, save_result_to_db
 
-app = FastAPI()
+app = FastAPI(title="JNTUH Results API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,66 +16,91 @@ app.add_middleware(
 )
 
 
+# ---------------- STARTUP ----------------
 @app.on_event("startup")
 async def startup():
     await init_db()
 
 
+# ---------------- ROOT ----------------
 @app.get("/")
 def root():
     return {"status": "JNTUH Results API running"}
 
 
-def normalize(htno, raw):
+# ---------------- NORMALIZE ----------------
+def normalize(htno: str, raw: list):
     if not raw:
         return None
 
+    meta = raw[0].get("meta", {})
+
     return {
         "hallTicket": htno,
-        "name": raw[0]["meta"]["name"],
-        "college": raw[0]["meta"]["college"],
+        "name": meta.get("name"),
+        "fatherName": meta.get("fatherName"),
+        "college": meta.get("college"),
+        "collegeCode": meta.get("collegeCode"),
+        "branch": meta.get("branch"),
         "semesters": [
             {
-                "semester": r["semester"],
-                "semesterType": r.get("semesterType"),
-                "subjects": r["subjects"]
+                "semester": r.get("semester"),
+                "subjects": r.get("subjects", [])
             }
             for r in raw
         ]
     }
 
 
+# ---------------- RESULT API ----------------
 @app.get("/result/{htno}")
 async def get_result(htno: str):
-    htno = htno.strip()
+    htno = htno.strip().upper()
 
-    # ⚡ 1. TRY REDIS (SAFE)
+    # 1️⃣ CACHE
     cached = get_cache(htno)
     if cached:
         return {
             "cached": True,
-            "source": "redis",
+            "source": "cache",
             "data": cached
         }
 
-    # 💾 2. SQLITE DB
-    db_result = await get_result_from_db(htno)
-    if db_result:
-        set_cache(htno, db_result)
+    # 2️⃣ DATABASE
+    db_data = await get_result_from_db(htno)
+    if db_data:
+        set_cache(htno, db_data)
         return {
             "cached": True,
             "source": "db",
-            "data": db_result
+            "data": db_data
         }
 
-    # 🌐 3. SCRAPER
-    raw = await scrape_all_results(htno)
+    # 3️⃣ SCRAPER
+    try:
+        raw = await scrape_all_results(htno)
+        print("SCRAPER RAW OUTPUT:", raw)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail="Scraper crashed. Check backend logs."
+        )
+
     if not raw:
-        raise HTTPException(404, "Result not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Result not found or blocked by JNTUH"
+        )
 
     normalized = normalize(htno, raw)
+    if not normalized:
+        raise HTTPException(
+            status_code=404,
+            detail="Result parsing failed"
+        )
 
-    # SAVE TO DB + CACHE (SAFE)
+    # 4️⃣ SAVE
     await save_result_to_db(htno, normalized)
     set_cache(htno, normalized)
 
