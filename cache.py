@@ -47,6 +47,6 @@ def set_cache(key, value):
     if not REDIS_AVAILABLE:
         return
     try:
-        redis_client.setex(key, CACHE_TTL, json.dumps(value))
+        redis_client.set(key, json.dumps(value))
     except Exception:
         pass
