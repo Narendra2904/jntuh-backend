@@ -25,7 +25,7 @@ async def startup():
 # ---------------- ROOT ----------------
 @app.get("/")
 def root():
-    return {"status": "JNTUH Results API running"}
+    return {"status": "Server Working Brooo!!"}
 
 
 # ---------------- NORMALIZE ----------------
