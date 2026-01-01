@@ -89,9 +89,9 @@ class ResultScraper:
 
 
     # ---------------------
-async def fetch(self, session, semester, exam_code, payload):
+    async def fetch(self, session, semester, exam_code, payload):
         url = f"{RESULT_URL}?&examCode={exam_code}{payload}{self.roll_number}"
-        # Check if this specific payload is the RCRV one
+            # Check if this specific payload is the RCRV one
         is_rcrv = "rcrv" in payload.lower()
         try:
             async with session.get(url, ssl=False, timeout=8) as r:
