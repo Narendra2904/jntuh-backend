@@ -89,17 +89,19 @@ class ResultScraper:
 
 
     # ---------------------
-    async def fetch(self, session, semester, exam_code, payload):
+async def fetch(self, session, semester, exam_code, payload):
         url = f"{RESULT_URL}?&examCode={exam_code}{payload}{self.roll_number}"
+        # Check if this specific payload is the RCRV one
+        is_rcrv = "rcrv" in payload.lower()
         try:
             async with session.get(url, ssl=False, timeout=8) as r:
-                return semester, exam_code,await r.text()
+                # Return the is_rcrv flag so parse_html knows what it's looking at
+                return semester, exam_code, await r.text(), is_rcrv
         except Exception:
             return None
 
-
     # ---------------------
-    def parse_html(self, semester, exam_code, html):
+    def parse_html(self, semester, exam_code, html, is_rcrv): # Add is_rcrv here
         if not html or "SUBJECT CODE" not in html:
             return
 
@@ -140,14 +142,15 @@ class ResultScraper:
                 continue
 
             subject = {
-                "subjectCode": cols[header.index("SUBJECT CODE")].text.strip(),
-                "subjectName": cols[header.index("SUBJECT NAME")].text.strip(),
-                "examCode": exam_code,
-                "grade": cols[header.index("GRADE")].text.strip(),
-                "credits": cols[header.index("CREDITS(C)")].text.strip(),
-                "semester": semester,
-                "attempt": "regular",   # main.py adjusts attempts later
-            }
+            "subjectCode": cols[header.index("SUBJECT CODE")].text.strip(),
+            "subjectName": cols[header.index("SUBJECT NAME")].text.strip(),
+            "examCode": exam_code,
+            "grade": cols[header.index("GRADE")].text.strip(),
+            "credits": cols[header.index("CREDITS(C)")].text.strip(),
+            "semester": semester,
+            # If it's from the RCRV payload, label it so the frontend knows
+            "attempt": "rcrv" if is_rcrv else "regular", 
+        }
 
             if "INTERNAL" in header:
                 subject["internal"] = cols[header.index("INTERNAL")].text.strip()
@@ -184,10 +187,9 @@ class ResultScraper:
             responses = await asyncio.gather(*tasks, return_exceptions=True)
 
             for item in responses:
-                        # Everything below this line is now indented by 4 spaces
-                if isinstance(item, tuple) and len(item) == 3:
-                    semester, exam_code, html = item 
-                    self.parse_html(semester, exam_code, html)  
+                if isinstance(item, tuple) and len(item) == 4: # Changed from 3 to 4
+                    semester, exam_code, html, is_rcrv = item  # Added is_rcrv
+                    self.parse_html(semester, exam_code, html, is_rcrv)
 
 
     # ---------------------
