@@ -4,9 +4,6 @@ A fast, modern, mobile-friendly JNTUH results website built with a custom backen
 
 🔗 Live Site: https://btech-jntuh-results.vercel.app
 
-🔗 Backend API: https://jntuh-backend-7rad.onrender.com
-
-
 🚀 Features
 
 🔍 Instant Hall Ticket Search
