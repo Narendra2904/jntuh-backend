@@ -1,0 +1,16 @@
+{
+  "hosting": {
+    "public": "public",
+    "cleanUrls": true,
+    "trailingSlash": false,
+    "rewrites": [
+      {
+        "source": "/api/**",
+        "run": {
+          "serviceId": "jntuh-api",
+          "region": "asia-south1"
+        }
+      }
+    ]
+  }
+}
