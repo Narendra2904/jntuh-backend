@@ -180,28 +180,31 @@ class ResultScraper:
 
     # ---------------------
     async def scrape_all(self):
-        timeout = aiohttp.ClientTimeout(total=12)
+    timeout = aiohttp.ClientTimeout(total=20)
 
-        async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
-            tasks = []
+    semaphore = asyncio.Semaphore(5)  # LIMIT TO 5 REQUESTS AT A TIME
 
-            for semester, exam_codes in EXAM_CODES.items():
-                for code in exam_codes:
-                    # Regular attempt
-                    tasks.append(
-                        self.fetch(session, semester, code, "regular")
-                    )
-                    # RCRV attempt
-                    tasks.append(
-                        self.fetch(session, semester, code, "rcrv")
-                    )
+    async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
 
-            responses = await asyncio.gather(*tasks, return_exceptions=True)
+        async def safe_fetch(semester, code, attempt):
+            async with semaphore:
+                await asyncio.sleep(0.4)  # small delay to avoid block
+                return await self.fetch(session, semester, code, attempt)
 
-            for item in responses:
-                if isinstance(item, tuple) and len(item) == 4:
-                    semester, exam_code, html, attempt_type = item
-                    self.parse_html(semester, exam_code, html, attempt_type)
+        tasks = []
+
+        for semester, exam_codes in EXAM_CODES.items():
+            for code in exam_codes:
+                tasks.append(safe_fetch(semester, code, "regular"))
+                tasks.append(safe_fetch(semester, code, "rcrv"))
+
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for item in responses:
+            if isinstance(item, tuple) and len(item) == 4:
+                semester, exam_code, html, attempt_type = item
+                self.parse_html(semester, exam_code, html, attempt_type)
+
 
     # ---------------------
     async def run(self):
