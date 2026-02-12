@@ -14,11 +14,6 @@ from branch_codes import get_branch_name
 
 RESULT_URL = "http://results.jntuh.ac.in/resultAction"
 
-PAYLOADS = [
-    "&degree=btech&etype=r17&result=null&grad=null&type=intgrade&htno=",
-    "&degree=btech&etype=r17&result=gradercrv&grad=null&type=rcrvintgrade&htno=",
-]
-
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "text/html",
@@ -28,7 +23,7 @@ COLLEGE_PDF = Path("data/btech_mba_centers_reviewed.pdf")
 
 
 # =========================
-# COLLEGE MAP (PDF → CACHE)
+# COLLEGE MAP
 # =========================
 
 _COLLEGE_MAP = None
@@ -53,7 +48,6 @@ def load_college_map():
             if not table:
                 continue
 
-            # Skip header row
             for row in table[1:]:
                 if not row or len(row) < 2:
                     continue
@@ -72,7 +66,6 @@ def load_college_map():
     return _COLLEGE_MAP
 
 
-
 # =========================
 # SCRAPER
 # =========================
@@ -81,36 +74,54 @@ class ResultScraper:
     def __init__(self, roll_number: str):
         self.roll_number = roll_number.upper()
         self.college_map = load_college_map()
-
-        # THIS is what main.py expects
-        self.results = []   # list of { semester, meta, subjects }
-
-        self._meta = None   # store once
-
+        self.results = []
+        self._meta = None
 
     # ---------------------
-    async def fetch(self, session, semester, exam_code, payload):
-        url = f"{RESULT_URL}?&examCode={exam_code}{payload}{self.roll_number}"
-            # Check if this specific payload is the RCRV one
-        is_rcrv = "rcrv" in payload.lower()
-        try:
-            async with session.get(url, ssl=False, timeout=8) as r:
-                # Return the is_rcrv flag so parse_html knows what it's looking at
-                return semester, exam_code, await r.text(), is_rcrv
-        except Exception:
-            return None
+    async def fetch(self, session, semester, exam_code, attempt_type):
+        """
+        Try r22 → r18 → r17 dynamically.
+        Whichever returns valid result page will be used.
+        """
+
+        for etype in ["r22", "r18", "r17"]:
+
+            url = (
+                f"{RESULT_URL}?"
+                f"examCode={exam_code}"
+                f"&degree=btech"
+                f"&etype={etype}"
+                f"&result=null"
+                f"&grad=null"
+                f"&type=intgrade"
+                f"&htno={self.roll_number}"
+            )
+
+            try:
+                async with session.get(url, ssl=False, timeout=8) as r:
+                    html = await r.text()
+
+                    # If valid result page
+                    if html and "SUBJECT CODE" in html:
+                        return semester, exam_code, html, attempt_type
+
+            except Exception:
+                continue
+
+        return None
 
     # ---------------------
-    def parse_html(self, semester, exam_code, html, is_rcrv): # Add is_rcrv here
+    def parse_html(self, semester, exam_code, html, attempt_type):
         if not html or "SUBJECT CODE" not in html:
             return
 
         soup = BeautifulSoup(html, "lxml")
         tables = soup.find_all("table")
+
         if len(tables) < 2:
             return
 
-        # -------- META (ONCE) --------
+        # -------- META --------
         if self._meta is None:
             try:
                 details = tables[0].find_all("tr")
@@ -142,15 +153,14 @@ class ResultScraper:
                 continue
 
             subject = {
-            "subjectCode": cols[header.index("SUBJECT CODE")].text.strip(),
-            "subjectName": cols[header.index("SUBJECT NAME")].text.strip(),
-            "examCode": exam_code,
-            "grade": cols[header.index("GRADE")].text.strip(),
-            "credits": cols[header.index("CREDITS(C)")].text.strip(),
-            "semester": semester,
-            # If it's from the RCRV payload, label it so the frontend knows
-            "attempt": "rcrv" if is_rcrv else "regular", 
-        }
+                "subjectCode": cols[header.index("SUBJECT CODE")].text.strip(),
+                "subjectName": cols[header.index("SUBJECT NAME")].text.strip(),
+                "examCode": exam_code,
+                "grade": cols[header.index("GRADE")].text.strip(),
+                "credits": cols[header.index("CREDITS(C)")].text.strip(),
+                "semester": semester,
+                "attempt": attempt_type,
+            }
 
             if "INTERNAL" in header:
                 subject["internal"] = cols[header.index("INTERNAL")].text.strip()
@@ -168,29 +178,30 @@ class ResultScraper:
                 "subjects": subjects,
             })
 
-
     # ---------------------
     async def scrape_all(self):
-        timeout = aiohttp.ClientTimeout(total=10)
+        timeout = aiohttp.ClientTimeout(total=12)
 
         async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
             tasks = []
 
             for semester, exam_codes in EXAM_CODES.items():
                 for code in exam_codes:
-                    for payload in PAYLOADS:
-                        tasks.append(
-                            self.fetch(session, semester, code, payload)
-                        )
+                    # Regular attempt
+                    tasks.append(
+                        self.fetch(session, semester, code, "regular")
+                    )
+                    # RCRV attempt
+                    tasks.append(
+                        self.fetch(session, semester, code, "rcrv")
+                    )
 
-            # Around line 184
             responses = await asyncio.gather(*tasks, return_exceptions=True)
 
             for item in responses:
-                if isinstance(item, tuple) and len(item) == 4: # Changed from 3 to 4
-                    semester, exam_code, html, is_rcrv = item  # Added is_rcrv
-                    self.parse_html(semester, exam_code, html, is_rcrv)
-
+                if isinstance(item, tuple) and len(item) == 4:
+                    semester, exam_code, html, attempt_type = item
+                    self.parse_html(semester, exam_code, html, attempt_type)
 
     # ---------------------
     async def run(self):
