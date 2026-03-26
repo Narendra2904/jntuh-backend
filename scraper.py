@@ -89,16 +89,20 @@ class ResultScraper:
 
 
     # ---------------------
-    async def fetch(self, session, semester, exam_code, payload):
-        url = f"{RESULT_URL}?&examCode={exam_code}{payload}{self.roll_number}"
-            # Check if this specific payload is the RCRV one
-        is_rcrv = "rcrv" in payload.lower()
+   async def fetch(self, session, semester, exam_code, payload):
+    url = f"{RESULT_URL}?&examCode={exam_code}{payload}{self.roll_number}"
+    is_rcrv = "rcrv" in payload.lower()
+
+    for attempt in range(3):  # 🔥 retry 3 times
         try:
-            async with session.get(url, ssl=False, timeout=8) as r:
-                # Return the is_rcrv flag so parse_html knows what it's looking at
-                return semester, exam_code, await r.text(), is_rcrv
+            async with session.get(url, ssl=False, timeout=15) as r:
+                html = await r.text()
+                return semester, exam_code, html, is_rcrv
         except Exception:
-            return None
+            await asyncio.sleep(1)
+
+    print(f"❌ Failed after retries: {semester} - {exam_code}")
+    return None
 
     # ---------------------
     def parse_html(self, semester, exam_code, html, is_rcrv): # Add is_rcrv here
@@ -175,12 +179,17 @@ class ResultScraper:
 
         async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
             tasks = []
+            semaphore = asyncio.Semaphore(10)  # 🔥 ADD THIS
+            async def limited_fetch(semester, code, payload):
+                async with semaphore:
+                    return await self.fetch(session, semester, code, payload)
+
 
             for semester, exam_codes in EXAM_CODES.items():
                 for code in exam_codes:
                     for payload in PAYLOADS:
                         tasks.append(
-                            self.fetch(session, semester, code, payload)
+                            self.fetch(semester, code, payload)
                         )
 
             # Around line 184
