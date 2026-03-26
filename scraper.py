@@ -53,7 +53,6 @@ def load_college_map():
             if not table:
                 continue
 
-            # Skip header row
             for row in table[1:]:
                 if not row or len(row) < 2:
                     continue
@@ -72,7 +71,6 @@ def load_college_map():
     return _COLLEGE_MAP
 
 
-
 # =========================
 # SCRAPER
 # =========================
@@ -82,30 +80,29 @@ class ResultScraper:
         self.roll_number = roll_number.upper()
         self.college_map = load_college_map()
 
-        # THIS is what main.py expects
-        self.results = []   # list of { semester, meta, subjects }
-
-        self._meta = None   # store once
+        self.results = []
+        self._meta = None
 
 
     # ---------------------
-   async def fetch(self, session, semester, exam_code, payload):
-    url = f"{RESULT_URL}?&examCode={exam_code}{payload}{self.roll_number}"
-    is_rcrv = "rcrv" in payload.lower()
+    async def fetch(self, session, semester, exam_code, payload):
+        url = f"{RESULT_URL}?&examCode={exam_code}{payload}{self.roll_number}"
+        is_rcrv = "rcrv" in payload.lower()
 
-    for attempt in range(3):  # 🔥 retry 3 times
-        try:
-            async with session.get(url, ssl=False, timeout=15) as r:
-                html = await r.text()
-                return semester, exam_code, html, is_rcrv
-        except Exception:
-            await asyncio.sleep(1)
+        for _ in range(3):  # retry
+            try:
+                async with session.get(url, ssl=False, timeout=15) as r:
+                    html = await r.text()
+                    return semester, exam_code, html, is_rcrv
+            except Exception:
+                await asyncio.sleep(1)
 
-    print(f"❌ Failed after retries: {semester} - {exam_code}")
-    return None
+        print(f"❌ Failed after retries: {semester} - {exam_code}")
+        return None
+
 
     # ---------------------
-    def parse_html(self, semester, exam_code, html, is_rcrv): # Add is_rcrv here
+    def parse_html(self, semester, exam_code, html, is_rcrv):
         if not html or "SUBJECT CODE" not in html:
             return
 
@@ -114,7 +111,7 @@ class ResultScraper:
         if len(tables) < 2:
             return
 
-        # -------- META (ONCE) --------
+        # -------- META --------
         if self._meta is None:
             try:
                 details = tables[0].find_all("tr")
@@ -146,15 +143,14 @@ class ResultScraper:
                 continue
 
             subject = {
-            "subjectCode": cols[header.index("SUBJECT CODE")].text.strip(),
-            "subjectName": cols[header.index("SUBJECT NAME")].text.strip(),
-            "examCode": exam_code,
-            "grade": cols[header.index("GRADE")].text.strip(),
-            "credits": cols[header.index("CREDITS(C)")].text.strip(),
-            "semester": semester,
-            # If it's from the RCRV payload, label it so the frontend knows
-            "attempt": "rcrv" if is_rcrv else "regular", 
-        }
+                "subjectCode": cols[header.index("SUBJECT CODE")].text.strip(),
+                "subjectName": cols[header.index("SUBJECT NAME")].text.strip(),
+                "examCode": exam_code,
+                "grade": cols[header.index("GRADE")].text.strip(),
+                "credits": cols[header.index("CREDITS(C)")].text.strip(),
+                "semester": semester,
+                "attempt": "rcrv" if is_rcrv else "regular",
+            }
 
             if "INTERNAL" in header:
                 subject["internal"] = cols[header.index("INTERNAL")].text.strip()
@@ -175,29 +171,28 @@ class ResultScraper:
 
     # ---------------------
     async def scrape_all(self):
-        timeout = aiohttp.ClientTimeout(total=10)
+        timeout = aiohttp.ClientTimeout(total=20)  # increased
 
         async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
             tasks = []
-            semaphore = asyncio.Semaphore(10)  # 🔥 ADD THIS
+            semaphore = asyncio.Semaphore(10)
+
             async def limited_fetch(semester, code, payload):
                 async with semaphore:
                     return await self.fetch(session, semester, code, payload)
-
 
             for semester, exam_codes in EXAM_CODES.items():
                 for code in exam_codes:
                     for payload in PAYLOADS:
                         tasks.append(
-                            self.fetch(semester, code, payload)
+                            limited_fetch(semester, code, payload)  # FIXED
                         )
 
-            # Around line 184
             responses = await asyncio.gather(*tasks, return_exceptions=True)
 
             for item in responses:
-                if isinstance(item, tuple) and len(item) == 4: # Changed from 3 to 4
-                    semester, exam_code, html, is_rcrv = item  # Added is_rcrv
+                if isinstance(item, tuple) and len(item) == 4:
+                    semester, exam_code, html, is_rcrv = item
                     self.parse_html(semester, exam_code, html, is_rcrv)
 
 
