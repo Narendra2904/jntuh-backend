@@ -125,7 +125,7 @@ class ResultScraper:
                     "name": name,
                     "fatherName": father,
                     "collegeCode": college_code,
-                    "college": self.college_map.get(college_code),
+                    "college": self.college_map.get(college_code, ""),
                     "branch": get_branch_name(htno),
                 }
             except Exception:
