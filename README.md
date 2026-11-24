@@ -1,114 +1,56 @@
-🎓 JNTUH B.Tech Results Portal
+# 🎓 JNTUH B.Tech Results Portal
 
-A fast, modern, mobile-friendly JNTUH results website built with a custom backend, intelligent caching, and a clean UI inspired by student-first platforms.
+[![Live Demo](https://img.shields.io/badge/Live%20Site-btech--jntuh--results.vercel.app-FACC15?style=for-the-badge&logo=vercel&logoColor=black)](https://btech-jntuh-results.vercel.app)
+[![Backend](https://img.shields.io/badge/Backend-FastAPI%20%7C%20Render-009688?style=for-the-badge&logo=fastapi&logoColor=white)](#)
+[![Cache](https://img.shields.io/badge/Cache-Redis%20(Upstash)-DC382D?style=for-the-badge&logo=redis&logoColor=white)](#)
+[![Database](https://img.shields.io/badge/Database-SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](#)
 
-🔗 Live Site: https://btech-jntuh-results.vercel.app
+> **"Built by a student, for students — fast, clean, and reliable."**  
+> A fast, modern, and mobile-friendly **JNTUH B.Tech Results Portal** powered by a custom Python FastAPI backend, multi-layer caching (Redis + SQLite), and a distraction-free, print-ready frontend.
 
-🚀 Features
+---
 
-🔍 Instant Hall Ticket Search
+## 📖 Overview
 
-📚 Semester-wise Results View
+Official university result portals often slow down or crash during peak result announcements. **JNTUH B.Tech Results Portal** solves this with a resilient **multi-tier caching architecture**. Once a student's results are fetched from the JNTUH servers, they are stored in both **Upstash Redis** (for sub-second retrieval) and **SQLite** (for persistent fallback), ensuring blazing-fast performance even under heavy traffic.
 
-⚡ Ultra-fast responses using Redis Cache
+---
 
-🗄️ SQLite database for persistent storage
+## ✨ Key Features
 
-🧠 Smart cache (DB → Redis → Scraper fallback)
+- **🔍 Instant Hall Ticket Search:** Quickly fetch complete academic records using just a JNTUH Hall Ticket Number.
+- **📚 Semester-Wise Results View:** Clean, structured breakdown of subjects, internal/external marks, credits, grades, and SGPA/CGPA across all semesters.
+- **⚡ Multi-Tier Smart Caching (`Redis → SQLite → Scraper`):**
+  - Ultra-fast in-memory responses via **Upstash Redis** with an automatic **12-hour TTL (`43200s`)**.
+  - Persistent local storage via **SQLite** to minimize redundant scraping.
+- **🖨️ Clean Print / PDF Mode:** Built-in print stylesheet that automatically formats results into a crisp, high-contrast **white background and black text** layout for instant PDF saving or printing.
+- **📱 Mobile-First Responsive UI:** Designed to work seamlessly across smartphones, tablets, and desktops.
+- **📊 Traffic & Performance Insights:** Integrated **Vercel Analytics** to monitor real-time usage during peak result days.
 
-📱 Fully Mobile-Responsive UI
+---
 
-🖨️ Clean Print / PDF Mode (White background, Black text)
+## 🏗️ System Architecture
 
-🔄 Automatic backend caching (12-hour TTL)
-
-🌍 Deployed on Vercel + Render
-
-📊 Vercel Analytics enabled
-
-
-🏗️ Tech Stack
-Frontend
-
-HTML5
-
-CSS3 (Custom, Mobile-First)
-
-Vanilla JavaScript
-
-Deployed on Vercel
-
-Backend
-
-Python
-
-FastAPI
-
-Redis (Upstash – Free Tier)
-
-SQLite (Free, Lightweight DB)
-
-Deployed on Render
-
-
-How It Works (Architecture)
-User Request
-     ↓
-Redis Cache (Fastest)
-     ↓ (if not found)
-SQLite Database
-     ↓ (if not found)
-Live JNTUH Scraper
-     ↓
-Cache Result (Redis + DB)
-     ↓
-Response to User
-
-
-✔️ First request may take time
-✔️ Subsequent requests are blazing fast
-
-📂 Project Structure
-Backend
-backend/
-├── main.py           # FastAPI entry point
-├── scraper.py        # JNTUH results scraper
-├── cache.py          # Redis cache logic
-├── database.py       # SQLite DB handler
-├── exam_codes.py     # Exam code mapping
-├── requirements.txt
-└── start.sh
-
-Frontend
-frontend/
-├── index.html
-├── assets/
-│   ├── logo.jpg
-│   └── fav.png
-
-🔐 Environment Variables (Backend)
-
-Set these in Render / local .env
-
-REDIS_URL=rediss://default:<token>@<endpoint>:6379
-CACHE_TTL=43200
-
-👨‍💻 Author
-
-Narendra Yenagandula
-Final-year B.Tech Student
-Interested in Full-Stack Development, Backend Systems & Cloud
-
-⭐ Support
-
-If you find this useful:
-
-⭐ Star the repo
-
-🍴 Fork it
-
-🐛 Report issues / suggest features
-
-🎬 Final Note
-
-“Built by a student, for students — fast, clean, and reliable.”
+```text
+                    ┌─────────────────────┐
+                    │    User Request     │
+                    │ (Hall Ticket Query) │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐      HIT       ┌──────────────────────┐
+                    │     Redis Cache     │───────────────▶│  Blazing-Fast JSON   │
+                    │   (Upstash - 12h)   │                │  Response to Client  │
+                    └──────────┬──────────┘                └──────────────────────┘
+                               │ MISS                                 ▲
+                               ▼                                      │
+                    ┌─────────────────────┐      HIT                  │
+                    │   SQLite Database   │───────────────────────────┤
+                    │ (Persistent Store)  │                           │
+                    └──────────┬──────────┘                           │
+                               │ MISS                                 │
+                               ▼                                      │
+                    ┌─────────────────────┐                           │
+                    │ Live JNTUH Scraper  │───────────────────────────┘
+                    │   (FastAPI Engine)  │   (Saves to SQLite + Redis)
+                    └─────────────────────┘
